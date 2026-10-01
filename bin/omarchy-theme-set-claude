@@ -47,12 +47,16 @@ if (( CLAUDE_ACTIVATE == 0 )) && [[ ! -d $CLAUDE_CONFIG_DIR ]]; then
 fi
 
 write_setting_theme() {
-  local tmp
+  local tmp settings_path
 
   if [[ -f $CLAUDE_SETTINGS_PATH ]]; then
-    tmp=$(mktemp "$CLAUDE_SETTINGS_PATH.XXXXXX")
-    jq '.theme = "custom:omarchy"' "$CLAUDE_SETTINGS_PATH" >"$tmp"
-    mv "$tmp" "$CLAUDE_SETTINGS_PATH"
+    # Publish beside the referent so dotfiles symlinks stay attached and the
+    # replacement is atomic, carrying the existing permissions with it.
+    settings_path=$(realpath -e "$CLAUDE_SETTINGS_PATH")
+    tmp=$(mktemp "$settings_path.XXXXXX")
+    jq '.theme = "custom:omarchy"' "$settings_path" >"$tmp"
+    chmod --reference="$settings_path" "$tmp"
+    mv -fT "$tmp" "$settings_path"
   else
     cat >"$CLAUDE_SETTINGS_PATH" <<EOF
 {

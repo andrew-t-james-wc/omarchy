@@ -49,14 +49,18 @@ if (( PI_ACTIVATE == 0 )) && [[ ! -d $PI_AGENT_DIR ]]; then
 fi
 
 write_setting_theme() {
-  local tmp
+  local tmp settings_path
 
   mkdir -p "$PI_AGENT_DIR"
 
   if [[ -f $PI_SETTINGS_PATH ]]; then
-    tmp=$(mktemp "$PI_SETTINGS_PATH.XXXXXX")
-    jq '.theme = "omarchy-system"' "$PI_SETTINGS_PATH" >"$tmp"
-    mv "$tmp" "$PI_SETTINGS_PATH"
+    # Publish beside the referent so dotfiles symlinks stay attached and the
+    # replacement is atomic, carrying the existing permissions with it.
+    settings_path=$(realpath -e "$PI_SETTINGS_PATH")
+    tmp=$(mktemp "$settings_path.XXXXXX")
+    jq '.theme = "omarchy-system"' "$settings_path" >"$tmp"
+    chmod --reference="$settings_path" "$tmp"
+    mv -fT "$tmp" "$settings_path"
   else
     cat >"$PI_SETTINGS_PATH" <<EOF
 {

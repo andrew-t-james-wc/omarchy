@@ -150,8 +150,16 @@ fi
 # Map another UID in a disposable user namespace without sudo or creating an
 # account. Back in the test process the file is owned by that UID and writable
 # through the caller's group, reproducing shared dotfiles owned by another user.
-if (( EUID != 0 )) && command -v unshare >/dev/null &&
-  unshare --user --map-auto --map-root-user true 2>/dev/null; then
+shared_fixtures=false
+if (( EUID != 0 )) && command -v unshare >/dev/null; then
+  probe=$(mktemp "$test_tmp/dotfiles with spaces/ownership-probe.XXXXXX")
+  if unshare --user --map-auto --map-root-user chown 1:0 "$probe" 2>/dev/null &&
+    unshare --user --map-auto --map-root-user chown 0:1 "$probe" 2>/dev/null; then
+    shared_fixtures=true
+  fi
+  rm -f "$probe"
+fi
+if $shared_fixtures; then
   rm "$target"
   printf '[font]\nbase-size = 12\nfamily = "keep-me"\n[bar]\nheight = 30\n' >"$target"
   chmod 660 "$target"
@@ -172,14 +180,21 @@ PY
     [[ -w $target ]] || fail "shared-file fixture is writable"
     expected_owner=$(stat -c '%u:%g' "$target")
     expected_inode=$(stat -c '%d:%i' "$target")
+    cp "$target" "$test_tmp/shared-original"
     if [[ $ownership == "1:0" ]]; then
       [[ ! -O $target ]] || fail "shared-file fixture has a different owner"
     else
       [[ " $(id -G) " != *" $(stat -c '%g' "$target") "* ]] || fail "shared-file fixture has a group the caller cannot assign"
     fi
     for action in 16 reset; do
-      "$ROOT/bin/omarchy-display-text-size" "$action" || fail "text sizing accepts a writable shared file"
+      : >"$OMARCHY_TEST_DESKTOP_LOG"
+      if "$ROOT/bin/omarchy-display-text-size" "$action" >"$test_tmp/output" 2>&1; then
+        fail "text sizing must refuse an update that cannot preserve ownership"
+      fi
       assert_config_preserved
+      cmp -s "$target" "$test_tmp/shared-original" || fail "a refused update preserves the original content"
+      grep -Fq 'Cannot preserve owner/group' "$test_tmp/output" || fail "a refused update explains the ownership constraint"
+      [[ ! -s $OMARCHY_TEST_DESKTOP_LOG ]] || fail "a refused update stops GTK changes"
       [[ $(stat -c '%d:%i' "$target") == "$expected_inode" ]] || fail "text sizing preserves the shared file's inode"
       if $acl_supported; then
         [[ $(getfacl -cpn "$target") == "$shared_acl" ]] || fail "shared config retains its ACL"
@@ -190,26 +205,30 @@ import os, sys
 assert os.getxattr(sys.argv[1], 'user.omarchy-test') == b'keep-me'
 PY
       fi
-      if [[ $action == "16" ]]; then
-        grep -Fxq 'base-size = 16' "$target" || fail "text sizing updates a shared file"
-      elif grep -q 'base-size' "$target"; then
-        fail "text size reset updates a shared file"
-      fi
+      for candidate in "$target".*; do
+        [[ ! -e $candidate ]] || fail "refused ownership updates leave no temporary files"
+      done
     done
   done
-  pass "setting and resetting text size retain inaccessible ownership on writable shared configs"
+  pass "setting and resetting text size refuse inaccessible ownership without changing shared configs"
 
   chmod 550 "$(dirname "$target")"
   for action in 16 reset; do
-    "$ROOT/bin/omarchy-display-text-size" "$action" || fail "text sizing accepts a writable file in a read-only directory"
+    : >"$OMARCHY_TEST_DESKTOP_LOG"
+    if "$ROOT/bin/omarchy-display-text-size" "$action" >"$test_tmp/output" 2>&1; then
+      fail "text sizing must refuse publication in a read-only directory"
+    fi
     assert_config_preserved
+    cmp -s "$target" "$test_tmp/shared-original" || fail "a refused publication preserves the original content"
+    grep -Fq 'Cannot stage a text-size update' "$test_tmp/output" || fail "a refused publication explains the directory constraint"
+    [[ ! -s $OMARCHY_TEST_DESKTOP_LOG ]] || fail "a refused publication stops GTK changes"
     [[ $(stat -c '%d:%i' "$target") == "$expected_inode" ]] || fail "text sizing preserves an inode in a read-only directory"
     for candidate in "$TMPDIR"/*; do
       [[ ! -e $candidate ]] || fail "shared config updates leave no temporary files"
     done
   done
   chmod 700 "$(dirname "$target")"
-  pass "setting and resetting text size update writable configs in read-only directories"
+  pass "setting and resetting text size refuse read-only directories without changing the config"
 else
   skip "shared ownership fixtures need an unprivileged caller and user namespace UID mapping"
 fi

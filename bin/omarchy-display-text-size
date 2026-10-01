@@ -49,25 +49,23 @@ current_base_size() {
   ' "$shell_config"
 }
 
-# Stage a complete transform before publishing. Keep symlinks and access metadata
-# with an atomic rename when ownership can be retained, otherwise write through
-# the existing inode of a shared config without trying to change its owner/group.
+# Publish beside the referent so changing text size keeps dotfiles symlinks and
+# access metadata. Refuse updates that cannot retain ownership and publish safely.
 rewrite_shell_config() (
-  local settings_path tmp can_replace=false
+  local settings_path tmp
   settings_path=$(realpath -e "$shell_config") || exit 1
-  if tmp=$(mktemp "$settings_path.XXXXXX" 2>/dev/null); then
-    can_replace=true
-  else
-    tmp=$(mktemp) || exit 1
+  if ! tmp=$(mktemp "$settings_path.XXXXXX" 2>/dev/null); then
+    echo "Cannot stage a text-size update beside $settings_path; check directory permissions." >&2
+    exit 1
   fi
   trap 'rm -f "$tmp"' EXIT
   awk "$@" "$settings_path" >"$tmp" || exit 1
-  if $can_replace && chown --reference="$settings_path" "$tmp" 2>/dev/null; then
-    cp --attributes-only --preserve=mode,xattr "$settings_path" "$tmp" || exit 1
-    mv -fT "$tmp" "$settings_path"
-  else
-    cat "$tmp" >"$settings_path"
+  if ! chown --reference="$settings_path" "$tmp" 2>/dev/null; then
+    echo "Cannot preserve owner/group of $settings_path; text size was not changed." >&2
+    exit 1
   fi
+  cp --attributes-only --preserve=mode,xattr "$settings_path" "$tmp" || exit 1
+  mv -fT "$tmp" "$settings_path"
 )
 
 # Upsert base-size under [font]: replace it in place if present, insert it into
